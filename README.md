@@ -1,6 +1,6 @@
-# leavecast-collectors
+# gatewaittimes-collectors
 
-Data collectors for [leavecast.com](https://leavecast.com) — live US airport
+Data collectors for [gatewaittimes.com](https://gatewaittimes.com) — live US airport
 security wait times. Polls TSA wait data, FAA NAS status, NWS weather, and CBP
 customs waits on a schedule and writes normalized readings to Postgres.
 

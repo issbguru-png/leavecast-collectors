@@ -1,4 +1,4 @@
--- Leavecast schema, plain-Postgres variant (Neon has no TimescaleDB).
+-- GateWaitTimes schema, plain-Postgres variant (Neon has no TimescaleDB).
 -- Same design as schema.sql: readings is append-only forever; hourly rollups
 -- are maintained by the collector job after each write batch.
 

@@ -1,5 +1,5 @@
 // ============================================================================
-// Leavecast collector contract — THE interface every collector implements.
+// GateWaitTimes collector contract — THE interface every collector implements.
 // Written before fan-out; do not change shapes without updating all collectors,
 // docs/schema.sql, and the writers below.
 // ============================================================================
@@ -29,7 +29,7 @@
  *  for a single bad airport — skip it, log it, return the rest. Throw only if
  *  the whole feed is down. */
 
-const UA = 'Leavecast/0.1 (data collector; contact: ops@leavecast.com)';
+const UA = 'GateWaitTimes/0.1 (data collector; contact: ops@gatewaittimes.com)';
 
 export async function fetchText(url, { timeoutMs = 20000, headers = {} } = {}) {
   const res = await fetch(url, {

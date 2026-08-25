@@ -16,7 +16,7 @@
 import { nowIso } from '../lib/contract.mjs';
 
 const BASE = 'https://awt.cbp.gov/api/waitTime';
-const UA = 'Leavecast/0.1 (data collector; contact: ops@leavecast.com)';
+const UA = 'GateWaitTimes/0.1 (data collector; contact: ops@gatewaittimes.com)';
 const CONCURRENCY = 6;
 
 /** ctx.fetchJson is GET-only, so the report query needs its own POST helper. */
