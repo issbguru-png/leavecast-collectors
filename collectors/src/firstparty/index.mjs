@@ -1,30 +1,35 @@
-// Aggregator for all first-party airport feeds. Runs each sub-collector
-// independently; one feed failing (airport site down, schema change, bot wall)
-// never blocks the others, and never blocks the reseller baseline that already
-// covers these airports. Each sub-collector emits source:'firstparty' Readings.
-const COLLECTORS = [
-  './panynj.mjs',  // JFK, LGA, EWR (Port Authority)
-  './mwaa.mjs',    // DCA, IAD (Metro Washington)
-  './dtw.mjs',     // Detroit
-  './phx.mjs',     // Phoenix Sky Harbor
-  './phl.mjs',     // Philadelphia
+// Aggregator for all first-party airport feeds. Static imports (not dynamic)
+// so bundlers trace every sub-collector into serverless deployments. Each runs
+// independently; one feed failing never blocks the others or the reseller
+// baseline that already covers these airports.
+import * as panynj from './panynj.mjs';
+import * as mwaa from './mwaa.mjs';
+import * as dtw from './dtw.mjs';
+import * as phx from './phx.mjs';
+import * as phl from './phl.mjs';
+
+const FEEDS = [
+  ['panynj', panynj],  // JFK, LGA, EWR
+  ['mwaa', mwaa],      // DCA, IAD
+  ['dtw', dtw],        // Detroit
+  ['phx', phx],        // Phoenix Sky Harbor
+  ['phl', phl],        // Philadelphia
 ];
 
 export async function collect(ctx) {
   const settled = await Promise.allSettled(
-    COLLECTORS.map(async (mod) => {
+    FEEDS.map(async ([name, mod]) => {
       try {
-        const { collect } = await import(mod);
-        const rows = await collect(ctx);
+        const rows = await mod.collect(ctx);
         return Array.isArray(rows) ? rows : [];
       } catch (err) {
-        ctx.log(`feed ${mod} failed: ${err?.message ?? err}`);
+        ctx.log(`feed ${name} failed: ${err?.message ?? err}`);
         return [];
       }
     })
   );
   const rows = [];
   for (const s of settled) if (s.status === 'fulfilled') rows.push(...s.value);
-  ctx.log(`first-party: ${rows.length} readings from ${COLLECTORS.length} feeds`);
+  ctx.log(`first-party: ${rows.length} readings from ${FEEDS.length} feeds`);
   return rows;
 }
