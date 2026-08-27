@@ -38,11 +38,11 @@ export async function pgWriter(databaseUrl) {
       // keep `latest` current (page reads hit only this table)
       await pool.query(`
         INSERT INTO latest (airport, kind, ts, source, payload)
-        SELECT DISTINCT ON (a, k) a, k, t, s, p FROM unnest(
+        SELECT DISTINCT ON (a, k, s) a, k, t, s, p FROM unnest(
           $2::text[], $4::text[], $1::timestamptz[], $3::text[], $5::jsonb[]
-        ) AS u(a, k, t, s, p) ORDER BY a, k, t DESC
-        ON CONFLICT (airport, kind) DO UPDATE
-          SET ts = EXCLUDED.ts, source = EXCLUDED.source, payload = EXCLUDED.payload
+        ) AS u(a, k, t, s, p) ORDER BY a, k, s, t DESC
+        ON CONFLICT (airport, kind, source) DO UPDATE
+          SET ts = EXCLUDED.ts, payload = EXCLUDED.payload
           WHERE EXCLUDED.ts >= latest.ts`, [
         rows.map((r) => r.observedAt),
         rows.map((r) => r.airport),

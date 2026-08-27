@@ -20,6 +20,11 @@ jobs:
           TSAWAITTIMES_API_KEY: ${{ secrets.TSAWAITTIMES_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node collectors/run.mjs tsa
+      - name: Collect first-party airport feeds (JFK/LGA/EWR/DCA/IAD/DTW/PHX/PHL)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node collectors/run.mjs firstparty
+        continue-on-error: true
       - name: FAA NAS status
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

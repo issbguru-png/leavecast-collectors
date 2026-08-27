@@ -47,6 +47,9 @@ function apiReading(a, json) {
       standardMin: Number.isFinite(rightnow) ? rightnow : null,
       precheckOpen: derivePrecheckOpen(json, checkpoints),
       ...(checkpoints.length > 0 ? { checkpoints } : {}),
+      ...(Array.isArray(json?.estimated_hourly_times) && json.estimated_hourly_times.length > 0
+        ? { hourlyEstimates: json.estimated_hourly_times.map((h) => ({ slot: h.timeslot, waitMin: Number(h.waittime) || null })) }
+        : {}),
     },
   };
 }
