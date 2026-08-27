@@ -7,6 +7,7 @@ import * as mwaa from './mwaa.mjs';
 import * as dtw from './dtw.mjs';
 import * as phx from './phx.mjs';
 import * as phl from './phl.mjs';
+import * as dap from './dap.mjs';  // MCO/DFW/IAH — activates per-airport as keys arrive
 
 const FEEDS = [
   ['panynj', panynj],  // JFK, LGA, EWR
@@ -14,6 +15,7 @@ const FEEDS = [
   ['dtw', dtw],        // Detroit
   ['phx', phx],        // Phoenix Sky Harbor
   ['phl', phl],        // Philadelphia
+  ['dap', dap],        // MCO, DFW, IAH (key-gated; no-op until DAP_*_KEY set)
 ];
 
 export async function collect(ctx) {
