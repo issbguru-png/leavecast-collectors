@@ -58,6 +58,10 @@ function buildReading(code, rows) {
   // PreCheck: any open TSAPre -> true; TSAPre present but all closed -> false; none -> null.
   const preRows = rows.filter(isPre);
   const precheckOpen = preRows.length ? preRows.some((r) => r.queueOpen === true) : null;
+  const preWaits = preRows
+    .filter((r) => r.queueOpen === true && r.isWaitTimeAvailable === true && Number.isFinite(Number(r.timeInMinutes)))
+    .map((r) => Number(r.timeInMinutes));
+  const precheckMin = preWaits.length ? Math.max(...preWaits) : null;
 
   // Checkpoints from the standard (Reg) lanes, exact-duplicate rows collapsed.
   const seen = new Set();
@@ -87,7 +91,7 @@ function buildReading(code, rows) {
     airport: code,
     kind: 'security_wait',
     observedAt,
-    payload: { standardMin, precheckOpen, checkpoints },
+    payload: { standardMin, precheckOpen, precheckMin, checkpoints },
   };
 }
 

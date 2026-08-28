@@ -42,6 +42,7 @@ export async function collect(ctx) {
   if (!queues) throw new Error(`PHX feed shape unexpected: ${typeof data}`);
 
   const general = [];
+  const precheckWaits = [];
   let precheckSeen = false;
   let observedAt = null;
 
@@ -56,6 +57,8 @@ export async function collect(ctx) {
     }
     if (isPrecheck(name)) {
       precheckSeen = true;
+      const pw = generalWaitMin(q);
+      if (pw !== null) precheckWaits.push(pw);
       continue;
     }
     general.push({ name, waitMin: generalWaitMin(q), status: 'Open' });
@@ -74,6 +77,7 @@ export async function collect(ctx) {
     payload: {
       standardMin,
       precheckOpen: precheckSeen ? true : null,
+      precheckMin: precheckWaits.length ? Math.max(...precheckWaits) : null,
       checkpoints: general,
     },
   }];
