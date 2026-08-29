@@ -9,7 +9,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,6 +24,15 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node collectors/run.mjs firstparty
+        continue-on-error: true
+      - name: Install headless Chromium
+        run: npx puppeteer browsers install chrome
+      - name: Collect first-party via headless (DFW, MCO public pages)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node collectors/run.mjs dfw || true
+          node collectors/run.mjs mco || true
         continue-on-error: true
       - name: FAA NAS status
         env:

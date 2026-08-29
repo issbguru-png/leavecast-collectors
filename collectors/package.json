@@ -1,0 +1,10 @@
+{
+  "name": "@leavecast/collectors",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone data collectors. Runs in GitHub Actions via run.mjs, NOT bundled into the Vercel/Next.js web deploy. Puppeteer lives here (collectors/headless/*) and must never leak into the web serverless bundle.",
+  "dependencies": {
+    "puppeteer": "^25.9.0"
+  }
+}
