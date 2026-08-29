@@ -125,9 +125,13 @@ export async function collect(ctx) {
       .map((c) => c.waitMin);
     const standardMin = openStandard.length ? Math.max(...openStandard) : null;
 
-    // Derive precheckOpen by switching to the "TSA Pre✓" tab (guarded — a miss
-    // here must never break the standard-lane reading; it just yields null).
+    // Derive PreCheck by switching to the "TSA Pre✓" tab (guarded — a miss here
+    // must never break the standard-lane reading; it just yields nulls). The
+    // PreCheck lane aria-labels carry "current wait time N minutes" exactly like
+    // the General lanes, so we capture BOTH the open flag AND the actual minutes
+    // (precheckMin = MAX over open PreCheck checkpoints, mirroring standardMin).
     let precheckOpen = null;
+    let precheckMin = null;
     try {
       const switched = await page.evaluate(() => {
         // The "TSA Pre✓" control is a real <button> (or role=tab); target it
@@ -147,7 +151,13 @@ export async function collect(ctx) {
         ).catch(() => {});
         const preRaw = await page.evaluate(SCRAPE_LABELS);
         const pre = preRaw.map(parseLabel).filter(Boolean).filter((c) => isPre(c.lane));
-        if (pre.length) precheckOpen = pre.some((c) => c.status === 'Open');
+        if (pre.length) {
+          precheckOpen = pre.some((c) => c.status === 'Open');
+          const openPre = pre
+            .filter((c) => c.status === 'Open' && Number.isFinite(c.waitMin))
+            .map((c) => c.waitMin);
+          precheckMin = openPre.length ? Math.max(...openPre) : null;
+        }
       }
     } catch (err) {
       log(`dfw: precheck derivation skipped (${err?.message ?? err})`);
@@ -160,10 +170,10 @@ export async function collect(ctx) {
       airport: 'DFW',
       kind: 'security_wait',
       observedAt: nowIso(),
-      payload: { standardMin, precheckOpen, checkpoints },
+      payload: { standardMin, precheckOpen, precheckMin, checkpoints },
     };
 
-    log(`dfw: ${checkpoints.length} checkpoints, standardMin=${standardMin}, precheckOpen=${precheckOpen}`);
+    log(`dfw: ${checkpoints.length} checkpoints, standardMin=${standardMin}, precheckOpen=${precheckOpen}, precheckMin=${precheckMin}`);
     return [reading];
   } catch (err) {
     // Unexpected failure (launch/nav). Log and return [] — DFW then stays on the
