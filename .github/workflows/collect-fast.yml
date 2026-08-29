@@ -27,12 +27,14 @@ jobs:
         continue-on-error: true
       - name: Install headless Chromium
         run: npx puppeteer browsers install chrome
-      - name: Collect first-party via headless (DFW, MCO public pages)
+      - name: Collect first-party via headless (DFW, MCO, CLT, IAH public pages)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           node collectors/run.mjs dfw || true
           node collectors/run.mjs mco || true
+          node collectors/run.mjs clt || true
+          node collectors/run.mjs iah || true
         continue-on-error: true
       - name: FAA NAS status
         env:

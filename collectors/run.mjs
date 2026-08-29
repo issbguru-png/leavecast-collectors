@@ -8,7 +8,7 @@ import { validateReading, fetchJson, fetchText } from './lib/contract.mjs';
 import { ndjsonWriter, pgWriter } from './lib/writers.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const MODULES = { tsa: './src/tsa.mjs', faa: './src/faa.mjs', nws: './src/nws.mjs', cbp: './src/cbp.mjs', firstparty: './src/firstparty/index.mjs', dfw: './headless/dfw.mjs', mco: './headless/mco.mjs' };
+const MODULES = { tsa: './src/tsa.mjs', faa: './src/faa.mjs', nws: './src/nws.mjs', cbp: './src/cbp.mjs', firstparty: './src/firstparty/index.mjs', dfw: './headless/dfw.mjs', mco: './headless/mco.mjs', clt: './headless/clt.mjs', iah: './headless/iah.mjs' };
 
 const name = process.argv[2];
 if (!MODULES[name]) { console.error(`usage: run.mjs <${Object.keys(MODULES).join('|')}>`); process.exit(2); }
