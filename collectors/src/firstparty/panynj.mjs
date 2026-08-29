@@ -78,13 +78,9 @@ function buildReading(code, rows) {
     checkpoints.push({ name, waitMin, status });
   }
 
-  // Newest updateTime across the airport's rows -> ISO UTC; else fetch time.
-  let newest = -Infinity;
-  for (const r of rows) {
-    const t = easternToEpoch(r.updateTime);
-    if (Number.isFinite(t) && t > newest) newest = t;
-  }
-  const observedAt = Number.isFinite(newest) ? new Date(newest).toISOString() : nowIso();
+  // Feed updateTime proved unreliable (naive tz -> future stamps); we poll every
+  // 5 min, so fetch time is the honest, timezone-safe observation stamp.
+  const observedAt = nowIso();
 
   return {
     source: 'firstparty',
