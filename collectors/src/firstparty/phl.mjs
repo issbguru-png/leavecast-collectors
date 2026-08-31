@@ -109,6 +109,7 @@ export async function collect(ctx) {
       standardMin,
       // PHL's LiveReach feed does not flag PreCheck zones — leave null, don't guess.
       precheckOpen: null,
+      precheckMin: null,
       checkpoints,
     },
   }];
