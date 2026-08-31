@@ -1,0 +1,33 @@
+name: collect-headless (DFW/MCO/CLT/IAH)
+# Headless (Puppeteer) first-party collectors that CANNOT run in the serverless
+# web pinger. Primary trigger is workflow_dispatch, fired by the web app's own
+# reliable ~5-min cron pinger (POST .../actions/workflows/collect-headless.yml/
+# dispatches) — GitHub does NOT throttle workflow_dispatch the way it throttles
+# `schedule`. The schedule below is only a slow safety net in case the pinger
+# dispatch is down, so these airports never stay stale for long.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/30 * * * *'   # backup only; the pinger drives the real cadence
+concurrency:
+  group: collect-headless
+  cancel-in-progress: true   # a hung Chromium run must not block the next tick
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --omit=dev --no-audit --no-fund
+      - name: Install headless Chromium
+        run: npx puppeteer browsers install chrome
+      - name: Collect headless first-party (DFW, MCO, CLT, IAH public pages)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node collectors/run.mjs dfw || true
+          node collectors/run.mjs mco || true
+          node collectors/run.mjs clt || true
+          node collectors/run.mjs iah || true

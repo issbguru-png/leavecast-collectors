@@ -25,17 +25,10 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node collectors/run.mjs firstparty
         continue-on-error: true
-      - name: Install headless Chromium
-        run: npx puppeteer browsers install chrome
-      - name: Collect first-party via headless (DFW, MCO, CLT, IAH public pages)
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          node collectors/run.mjs dfw || true
-          node collectors/run.mjs mco || true
-          node collectors/run.mjs clt || true
-          node collectors/run.mjs iah || true
-        continue-on-error: true
+      # Headless collectors (DFW/MCO/CLT/IAH) moved to collect-headless.yml,
+      # which the web pinger drives via workflow_dispatch every ~5 min. Keeping
+      # them here too would double-run Chromium whenever this throttled schedule
+      # happens to fire.
       - name: FAA NAS status
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
