@@ -50,7 +50,9 @@ export async function collect(ctx) {
     observedAt: nowIso(),
     payload: {
       standardMin,
+      // DTW's SkyFii feed carries no PreCheck distinction — leave null, don't guess.
       precheckOpen: null,
+      precheckMin: null,
       checkpoints,
     },
   }];
