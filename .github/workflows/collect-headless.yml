@@ -1,7 +1,9 @@
-name: collect-headless (DFW/MCO/CLT/IAH)
-# Headless (Puppeteer) first-party collectors that CANNOT run in the serverless
-# web pinger. Primary trigger is workflow_dispatch, fired by the web app's own
-# reliable ~5-min cron pinger (POST .../actions/workflows/collect-headless.yml/
+name: collect-headless (DFW/MCO/CLT/IAH + BWI/MSP)
+# First-party collectors that can't be reliably refreshed by the serverless web
+# pinger — either they need a real browser (DFW/MCO/CLT/IAH, Puppeteer) or their
+# feed doesn't answer the pinger's serverless IP (BWI/MSP), though GitHub runners
+# reach them fine. Primary trigger is workflow_dispatch, fired by the web app's
+# own reliable ~5-min cron pinger (POST .../actions/workflows/collect-headless.yml/
 # dispatches) — GitHub does NOT throttle workflow_dispatch the way it throttles
 # `schedule`. The schedule below is only a slow safety net in case the pinger
 # dispatch is down, so these airports never stay stale for long.
@@ -23,7 +25,7 @@ jobs:
       - run: npm install --omit=dev --no-audit --no-fund
       - name: Install headless Chromium
         run: npx puppeteer browsers install chrome
-      - name: Collect headless first-party (DFW, MCO, CLT, IAH public pages)
+      - name: Collect GH-only first-party (DFW/MCO/CLT/IAH headless + BWI/MSP feeds)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
@@ -31,3 +33,5 @@ jobs:
           node collectors/run.mjs mco || true
           node collectors/run.mjs clt || true
           node collectors/run.mjs iah || true
+          node collectors/run.mjs bwi || true
+          node collectors/run.mjs msp || true
