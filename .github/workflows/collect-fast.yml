@@ -1,7 +1,10 @@
 name: collect-fast (tsa + faa)
 on:
+  # The web pinger (external cron) drives the real ~10-min cadence via
+  # workflow_dispatch. This schedule is a backup only, kept slow so it rarely
+  # fires mid-gap and lets the Neon compute suspend between pinger-driven runs.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch: {}
 concurrency:
   group: collect-fast
