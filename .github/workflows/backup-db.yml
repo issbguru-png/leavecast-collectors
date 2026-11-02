@@ -56,23 +56,14 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
-      # Install the PostgreSQL 18 client (server is postgres:18 — the client major
-      # must match the server) from the official PGDG apt repo, plus the AWS CLI.
-      - name: Install postgresql-client-18 + awscli
+      # pg_dump 18 comes from the postgres:18 Docker image (version must match the
+      # server); the AWS CLI is preinstalled on ubuntu-latest. No apt needed.
+      - name: Verify tooling (docker + aws preinstalled)
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends curl ca-certificates
-          # PGDG repo: drop the ASCII-armored key straight into trusted.gpg.d
-          # (no gpg --dearmor pipe, which was failing on the runner).
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo tee /etc/apt/trusted.gpg.d/apt.postgresql.org.asc > /dev/null
-          echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client-18 awscli
-          pg_dump --version
+          docker --version
           aws --version
+          docker pull -q postgres:18
 
       # Extract the public CA from the committed module to a temp file for libpq.
       - name: Write pinned CA to a temp file
@@ -88,12 +79,14 @@ jobs:
           DUMP="$RUNNER_TEMP/leavecast-${DATE}.dump"
           KEY="leavecast/leavecast-${DATE}.dump"
 
-          # Full-verification TLS via libpq env vars (URL has no sslmode, so these apply).
-          export PGSSLMODE=verify-full
-          export PGSSLROOTCERT="$RUNNER_TEMP/fly-db-ca.pem"
-
-          echo "Dumping leavecast (custom/compressed) ..."
-          pg_dump -Fc --no-owner --no-privileges -f "$DUMP" "$DATABASE_URL"
+          echo "Dumping leavecast (custom/compressed) via postgres:18 image ..."
+          # pg_dump runs inside postgres:18 (version match); CA mounted read-only,
+          # full TLS verification. Dump streams to the host file via stdout.
+          docker run --rm \
+            -e PGSSLMODE=verify-full -e PGSSLROOTCERT=/ca.pem \
+            -v "$RUNNER_TEMP/fly-db-ca.pem:/ca.pem:ro" \
+            postgres:18 \
+            pg_dump -Fc --no-owner --no-privileges "$DATABASE_URL" > "$DUMP"
           ls -lh "$DUMP"
 
           echo "Uploading s3://$BUCKET_NAME/$KEY ..."
