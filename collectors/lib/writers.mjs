@@ -1,5 +1,15 @@
 import { mkdir, appendFile } from 'node:fs/promises';
 import path from 'node:path';
+import { FLY_DB_CA } from './fly-db-ca.mjs';
+
+// TLS by host: the self-hosted Fly database's self-signed cert is pinned as the
+// trusted CA (full identity verification). localhost dev = no TLS; otherwise
+// honour the URL's own sslmode.
+function sslFor(url) {
+  if (!url || /@(localhost|127\.0\.0\.1)[:/]/.test(url)) return false;
+  if (url.includes('leavecast-db.fly.dev')) return { ca: FLY_DB_CA };
+  return undefined;
+}
 
 /** NDJSON writer — local dev + backfill-safe archive. One file per source per UTC day. */
 export function ndjsonWriter(rootDir) {
@@ -22,7 +32,7 @@ export function ndjsonWriter(rootDir) {
  *  keep collectors themselves zero-dependency). */
 export async function pgWriter(databaseUrl) {
   const { default: pg } = await import('pg');
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 3 });
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, ssl: sslFor(databaseUrl) });
   return {
     async write(rows) {
       if (!rows.length) return;
