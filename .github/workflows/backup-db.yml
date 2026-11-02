@@ -61,10 +61,13 @@ jobs:
       - name: Install postgresql-client-18 + awscli
         run: |
           set -euo pipefail
-          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl ca-certificates
+          # PGDG repo: drop the ASCII-armored key straight into trusted.gpg.d
+          # (no gpg --dearmor pipe, which was failing on the runner).
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.postgresql.org.asc > /dev/null
+          echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-18 awscli
