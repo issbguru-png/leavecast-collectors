@@ -1,0 +1,112 @@
+# backup-db — nightly off-box backup of the whole leavecast Postgres to Tigris (S3)
+#
+# WHAT IT DOES, every day:
+#   1. pg_dump -Fc (custom, compressed) the ENTIRE `leavecast` DB over the Fly
+#      public endpoint, with FULL TLS verification (CA pinned).
+#   2. Uploads the dump to a Tigris bucket (S3-compatible) as
+#      s3://$BUCKET_NAME/leavecast/leavecast-YYYYMMDD.dump
+#   3. Deletes backups older than ~14 days (keeps a rolling 2-week window).
+#
+# TLS: the Fly Postgres uses a self-signed cert pinned to the committed CA
+# (collectors/lib/fly-db-ca.mjs -> FLY_DB_CA). We extract that public cert to a temp
+# file and point libpq at it via PGSSLROOTCERT + PGSSLMODE=verify-full. DATABASE_URL
+# must NOT contain sslmode (so the env vars take effect, matching the app/collectors).
+#
+# ============================================================================
+# REQUIRED GITHUB REPO SECRETS (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL          postgres://leavecast:<password>@leavecast-db.fly.dev:5432/leavecast
+#                         (NO sslmode / sslrootcert in the URL — same secret the collectors use)
+#   AWS_ACCESS_KEY_ID      Tigris access key id       (fly storage create -> `flyctl storage create`,
+#   AWS_SECRET_ACCESS_KEY  Tigris secret access key    or the Tigris dashboard; shown once on creation)
+#   AWS_ENDPOINT_URL_S3    Tigris S3 endpoint, e.g.  https://fly.storage.tigris.dev
+#   BUCKET_NAME            the Tigris bucket name you created to hold these dumps
+#
+# The CA needs NO secret — it is a public certificate committed in this repo.
+#
+# HOW TO PROVISION TIGRIS (one-time, done by the user — NOT by this workflow):
+#   flyctl storage create            # creates a Tigris bucket + prints the 4 values above
+#   (or create a bucket in the Tigris dashboard and mint an access key pair)
+# Then add the 5 secrets above. Nothing here creates buckets or secrets.
+# ============================================================================
+
+name: backup-db (pg_dump -> Tigris)
+on:
+  schedule:
+    - cron: '40 5 * * *'   # daily, 05:40 UTC (after prune-readings at 04:20)
+  workflow_dispatch: {}
+
+concurrency:
+  group: backup-db
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+      BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+      AWS_REGION: auto         # Tigris accepts the "auto" region
+      RETENTION_DAYS: '14'     # delete dumps older than this many days
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      # Install the PostgreSQL 18 client (server is postgres:18 — the client major
+      # must match the server) from the official PGDG apt repo, plus the AWS CLI.
+      - name: Install postgresql-client-18 + awscli
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18 awscli
+          pg_dump --version
+          aws --version
+
+      # Extract the public CA from the committed module to a temp file for libpq.
+      - name: Write pinned CA to a temp file
+        run: |
+          set -euo pipefail
+          node --input-type=module -e "import('./collectors/lib/fly-db-ca.mjs').then(m => process.stdout.write(m.FLY_DB_CA))" > "$RUNNER_TEMP/fly-db-ca.pem"
+          test -s "$RUNNER_TEMP/fly-db-ca.pem"
+
+      - name: pg_dump -> upload to Tigris -> prune old dumps
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y%m%d)"
+          DUMP="$RUNNER_TEMP/leavecast-${DATE}.dump"
+          KEY="leavecast/leavecast-${DATE}.dump"
+
+          # Full-verification TLS via libpq env vars (URL has no sslmode, so these apply).
+          export PGSSLMODE=verify-full
+          export PGSSLROOTCERT="$RUNNER_TEMP/fly-db-ca.pem"
+
+          echo "Dumping leavecast (custom/compressed) ..."
+          pg_dump -Fc --no-owner --no-privileges -f "$DUMP" "$DATABASE_URL"
+          ls -lh "$DUMP"
+
+          echo "Uploading s3://$BUCKET_NAME/$KEY ..."
+          aws s3 cp "$DUMP" "s3://$BUCKET_NAME/$KEY" --endpoint-url "$AWS_ENDPOINT_URL_S3"
+
+          # Retention: delete dumps whose YYYYMMDD in the name is older than RETENTION_DAYS.
+          # (Alternatively, set a Tigris/S3 lifecycle rule on the leavecast/ prefix and
+          #  drop this block.)
+          echo "Pruning backups older than ${RETENTION_DAYS} days ..."
+          CUTOFF="$(date -u -d "${RETENTION_DAYS} days ago" +%Y%m%d)"
+          aws s3 ls "s3://$BUCKET_NAME/leavecast/" --endpoint-url "$AWS_ENDPOINT_URL_S3" \
+            | awk '{print $4}' | grep -E '^leavecast-[0-9]{8}\.dump$' | while read -r obj; do
+              d="$(echo "$obj" | sed -E 's/^leavecast-([0-9]{8})\.dump$/\1/')"
+              if [ "$d" -lt "$CUTOFF" ]; then
+                echo "  deleting $obj (date $d < cutoff $CUTOFF)"
+                aws s3 rm "s3://$BUCKET_NAME/leavecast/$obj" --endpoint-url "$AWS_ENDPOINT_URL_S3"
+              fi
+            done
+          echo "backup-db done."

@@ -1,0 +1,145 @@
+# prune-readings — raw-readings retention + cumulative stats (long-term cost control)
+#
+# WHAT IT DOES, every day:
+#   1. Bootstraps a small `readings_stats` table (CREATE TABLE IF NOT EXISTS) that
+#      holds the TRUE all-time reading counts + first-ever reading date.
+#   2. Refreshes `readings_stats` BEFORE pruning. The refresh is INCREMENTAL: it
+#      adds only rows newer than each row's high-water mark (`counted_through`) and
+#      never lowers `earliest_ts`, so the stored totals keep ACCUMULATING across
+#      prunes instead of tracking the shrinking live table. The website reads these
+#      numbers for its "we have recorded N readings here since DATE" credibility copy
+#      (web/lib/data.mjs -> getMeasurementStats), so pruning never degrades them.
+#   3. Deletes raw `readings` older than RETENTION_DAYS (default 90; change below or
+#      via the workflow_dispatch input). Recent-window queries the site runs against
+#      `readings` (latest-customs, ~25-min trend) only need fresh rows, so they are
+#      unaffected. The hourly moat lives in `security_wait_hourly`, also unaffected.
+#   4. Runs a light VACUUM (ANALYZE) on `readings` to reclaim space + refresh stats.
+#
+# CONNECTION: connects to the self-hosted Fly Postgres over its PUBLIC endpoint with
+# FULL TLS verification by pinning the committed CA (collectors/lib/fly-db-ca.mjs,
+# exported as FLY_DB_CA) via the pg `ssl` option. DATABASE_URL must NOT contain
+# sslmode (node-postgres lets a URL sslmode override the ssl object and break the pin).
+#
+# REQUIRED GITHUB REPO SECRET:
+#   DATABASE_URL  postgres://leavecast:<password>@leavecast-db.fly.dev:5432/leavecast
+#                 (no sslmode / no sslrootcert in the URL). Same secret the collectors use.
+#   No secret is needed for the CA — it is a public certificate committed in the repo.
+
+name: prune-readings (retention + stats)
+on:
+  schedule:
+    - cron: '20 4 * * *'   # daily, 04:20 UTC (off-peak)
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: 'Delete raw readings older than this many days'
+        required: false
+        default: '90'
+
+concurrency:
+  group: prune-readings
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # Only `pg` is needed here — install it alone (skip puppeteer/Chromium).
+      - run: npm install pg@^8 --no-save --no-audit --no-fund
+      - name: Refresh readings_stats, prune old readings, vacuum
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # default 90; the workflow_dispatch input overrides it when run manually
+          RETENTION_DAYS: ${{ github.event.inputs.retention_days || '90' }}
+          NODE_SCRIPT: |
+            import pg from 'pg';
+            import { FLY_DB_CA } from './collectors/lib/fly-db-ca.mjs';
+
+            const days = Number(process.env.RETENTION_DAYS || '90');
+            if (!Number.isFinite(days) || days < 1) throw new Error(`bad RETENTION_DAYS: ${process.env.RETENTION_DAYS}`);
+
+            // CA-pinned TLS; DATABASE_URL carries NO sslmode (see header note).
+            const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1, ssl: { ca: FLY_DB_CA } });
+
+            // 1. Self-bootstrap the cumulative stats table.
+            //    airport IS NULL  -> overall row (all kinds, all airports)
+            //    airport = <IATA> -> that airport's security_wait readings
+            //    counted_through  -> high-water mark: all rows with ts <= it are already counted
+            await pool.query(`
+              CREATE TABLE IF NOT EXISTS readings_stats (
+                airport         text,
+                total_count     bigint      NOT NULL DEFAULT 0,
+                earliest_ts     timestamptz,
+                counted_through timestamptz,
+                updated_at      timestamptz NOT NULL DEFAULT now()
+              )`);
+            // one row per airport + one overall (NULL) row; NULL needs an expression unique index
+            await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS readings_stats_airport_uk
+                              ON readings_stats (COALESCE(airport, ''))`);
+
+            const client = await pool.connect();
+            try {
+              // 2. Incremental refresh in ONE transaction so now() is a stable high-water
+              //    mark across both statements. New rows (< 1 day old) are always still
+              //    present at refresh time, so each reading is counted exactly once and is
+              //    never pruned before being counted.
+              await client.query('BEGIN');
+
+              // overall row (all kinds)
+              await client.query(`
+                INSERT INTO readings_stats (airport, total_count, earliest_ts, counted_through, updated_at)
+                SELECT NULL,
+                       COALESCE((SELECT total_count FROM readings_stats WHERE airport IS NULL), 0) + count(*),
+                       LEAST((SELECT earliest_ts FROM readings_stats WHERE airport IS NULL), min(ts)),
+                       now(), now()
+                FROM readings
+                WHERE ts <= now()
+                  AND ts > COALESCE((SELECT counted_through FROM readings_stats WHERE airport IS NULL), '-infinity'::timestamptz)
+                ON CONFLICT (COALESCE(airport, '')) DO UPDATE SET
+                  total_count     = EXCLUDED.total_count,
+                  earliest_ts     = LEAST(readings_stats.earliest_ts, EXCLUDED.earliest_ts),
+                  counted_through = EXCLUDED.counted_through,
+                  updated_at      = EXCLUDED.updated_at`);
+
+              // per-airport rows (security_wait only — matches the per-airport card copy)
+              await client.query(`
+                INSERT INTO readings_stats (airport, total_count, earliest_ts, counted_through, updated_at)
+                SELECT r.airport,
+                       COALESCE(s.total_count, 0) + count(*),
+                       LEAST(s.earliest_ts, min(r.ts)),
+                       now(), now()
+                FROM readings r
+                LEFT JOIN readings_stats s ON s.airport = r.airport
+                WHERE r.kind = 'security_wait'
+                  AND r.ts <= now()
+                  AND r.ts > COALESCE(s.counted_through, '-infinity'::timestamptz)
+                GROUP BY r.airport, s.total_count, s.earliest_ts
+                ON CONFLICT (COALESCE(airport, '')) DO UPDATE SET
+                  total_count     = EXCLUDED.total_count,
+                  earliest_ts     = LEAST(readings_stats.earliest_ts, EXCLUDED.earliest_ts),
+                  counted_through = EXCLUDED.counted_through,
+                  updated_at      = EXCLUDED.updated_at`);
+
+              await client.query('COMMIT');
+            } catch (e) {
+              await client.query('ROLLBACK');
+              throw e;
+            } finally {
+              client.release();
+            }
+
+            // 3. Prune raw readings older than the retention window.
+            const del = await pool.query(
+              `DELETE FROM readings WHERE ts < now() - make_interval(days => $1::int)`, [days]);
+            console.error(`[prune-readings] retention=${days}d, deleted ${del.rowCount} rows`);
+
+            // 4. Reclaim space + refresh planner stats (must run outside a transaction).
+            await pool.query('VACUUM (ANALYZE) readings');
+
+            await pool.end();
+            console.error('[prune-readings] done');
+        run: node --input-type=module -e "$NODE_SCRIPT"
