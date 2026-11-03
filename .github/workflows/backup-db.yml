@@ -1,11 +1,12 @@
-# backup-db — nightly off-box backup of the whole leavecast Postgres to Tigris (S3)
+# backup-db — nightly off-box backup of the Fly Postgres databases to Tigris (S3)
 #
-# WHAT IT DOES, every day:
-#   1. pg_dump -Fc (custom, compressed) the ENTIRE `leavecast` DB over the Fly
-#      public endpoint, with FULL TLS verification (CA pinned).
+# WHAT IT DOES, every day, for EACH database on the leavecast-db Fly instance
+# (`leavecast`, and `propfirmsquad` when its secret is set):
+#   1. pg_dump -Fc (custom, compressed) the ENTIRE DB over the Fly public
+#      endpoint, with FULL TLS verification (CA pinned).
 #   2. Uploads the dump to a Tigris bucket (S3-compatible) as
-#      s3://$BUCKET_NAME/leavecast/leavecast-YYYYMMDD.dump
-#   3. Deletes backups older than ~14 days (keeps a rolling 2-week window).
+#      s3://$BUCKET_NAME/<db>/<db>-YYYYMMDD.dump
+#   3. Deletes that DB's backups older than ~14 days (rolling 2-week window).
 #
 # TLS: the Fly Postgres uses a self-signed cert pinned to the committed CA
 # (collectors/lib/fly-db-ca.mjs -> FLY_DB_CA). We extract that public cert to a temp
@@ -16,6 +17,10 @@
 # REQUIRED GITHUB REPO SECRETS (Settings -> Secrets and variables -> Actions):
 #   DATABASE_URL          postgres://leavecast:<password>@leavecast-db.fly.dev:5432/leavecast
 #                         (NO sslmode / sslrootcert in the URL — same secret the collectors use)
+#   PROPFIRMSQUAD_DATABASE_URL
+#                         postgres://propfirmsquad:<password>@leavecast-db.fly.dev:5432/propfirmsquad
+#                         (the propfirmsquad DB lives on the SAME Fly instance; same CA, NO sslmode.
+#                          Dumped to s3://$BUCKET_NAME/propfirmsquad/ so deleting its Neon project is safe.)
 #   AWS_ACCESS_KEY_ID      Tigris access key id       (fly storage create -> `flyctl storage create`,
 #   AWS_SECRET_ACCESS_KEY  Tigris secret access key    or the Tigris dashboard; shown once on creation)
 #   AWS_ENDPOINT_URL_S3    Tigris S3 endpoint, e.g.  https://fly.storage.tigris.dev
@@ -45,6 +50,7 @@ jobs:
     timeout-minutes: 45
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PROPFIRMSQUAD_DATABASE_URL: ${{ secrets.PROPFIRMSQUAD_DATABASE_URL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
@@ -76,33 +82,50 @@ jobs:
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y%m%d)"
-          DUMP="$RUNNER_TEMP/leavecast-${DATE}.dump"
-          KEY="leavecast/leavecast-${DATE}.dump"
-
-          echo "Dumping leavecast (custom/compressed) via postgres:18 image ..."
-          # pg_dump runs inside postgres:18 (version match); CA mounted read-only,
-          # full TLS verification. Dump streams to the host file via stdout.
-          docker run --rm \
-            -e PGSSLMODE=verify-full -e PGSSLROOTCERT=/ca.pem \
-            -v "$RUNNER_TEMP/fly-db-ca.pem:/ca.pem:ro" \
-            postgres:18 \
-            pg_dump -Fc --no-owner --no-privileges "$DATABASE_URL" > "$DUMP"
-          ls -lh "$DUMP"
-
-          echo "Uploading s3://$BUCKET_NAME/$KEY ..."
-          aws s3 cp "$DUMP" "s3://$BUCKET_NAME/$KEY" --endpoint-url "$AWS_ENDPOINT_URL_S3"
-
-          # Retention: delete dumps whose YYYYMMDD in the name is older than RETENTION_DAYS.
-          # (Alternatively, set a Tigris/S3 lifecycle rule on the leavecast/ prefix and
-          #  drop this block.)
-          echo "Pruning backups older than ${RETENTION_DAYS} days ..."
           CUTOFF="$(date -u -d "${RETENTION_DAYS} days ago" +%Y%m%d)"
-          aws s3 ls "s3://$BUCKET_NAME/leavecast/" --endpoint-url "$AWS_ENDPOINT_URL_S3" \
-            | awk '{print $4}' | grep -E '^leavecast-[0-9]{8}\.dump$' | while read -r obj; do
-              d="$(echo "$obj" | sed -E 's/^leavecast-([0-9]{8})\.dump$/\1/')"
-              if [ "$d" -lt "$CUTOFF" ]; then
-                echo "  deleting $obj (date $d < cutoff $CUTOFF)"
-                aws s3 rm "s3://$BUCKET_NAME/leavecast/$obj" --endpoint-url "$AWS_ENDPOINT_URL_S3"
-              fi
-            done
+
+          # Dump one database, upload it under its own prefix, then prune that
+          # prefix. $1 = db label / prefix (also the dump basename), $2 = URL.
+          backup_db() {
+            local LABEL="$1" URL="$2"
+            local DUMP="$RUNNER_TEMP/${LABEL}-${DATE}.dump"
+            local KEY="${LABEL}/${LABEL}-${DATE}.dump"
+
+            echo "== ${LABEL}: dumping (custom/compressed) via postgres:18 image =="
+            # pg_dump runs inside postgres:18 (version match); CA mounted read-only,
+            # full TLS verification. Dump streams to the host file via stdout.
+            docker run --rm \
+              -e PGSSLMODE=verify-full -e PGSSLROOTCERT=/ca.pem \
+              -v "$RUNNER_TEMP/fly-db-ca.pem:/ca.pem:ro" \
+              postgres:18 \
+              pg_dump -Fc --no-owner --no-privileges "$URL" > "$DUMP"
+            ls -lh "$DUMP"
+
+            echo "== ${LABEL}: uploading s3://$BUCKET_NAME/$KEY =="
+            aws s3 cp "$DUMP" "s3://$BUCKET_NAME/$KEY" --endpoint-url "$AWS_ENDPOINT_URL_S3"
+
+            # Retention: delete dumps in this prefix older than RETENTION_DAYS.
+            echo "== ${LABEL}: pruning backups older than ${RETENTION_DAYS} days =="
+            aws s3 ls "s3://$BUCKET_NAME/${LABEL}/" --endpoint-url "$AWS_ENDPOINT_URL_S3" \
+              | awk '{print $4}' | grep -E "^${LABEL}-[0-9]{8}\.dump$" | while read -r obj; do
+                d="$(echo "$obj" | sed -E "s/^${LABEL}-([0-9]{8})\.dump\$/\1/")"
+                if [ "$d" -lt "$CUTOFF" ]; then
+                  echo "  deleting $obj (date $d < cutoff $CUTOFF)"
+                  aws s3 rm "s3://$BUCKET_NAME/${LABEL}/$obj" --endpoint-url "$AWS_ENDPOINT_URL_S3"
+                fi
+              done
+          }
+
+          # leavecast (the big readings DB) — always.
+          backup_db leavecast "$DATABASE_URL"
+
+          # propfirmsquad (Payload CMS, same Fly instance, separate DB) — if its
+          # secret is set. Guarded so the workflow still works before the secret
+          # is added. Its Neon project is deleted once this backup is confirmed.
+          if [ -n "${PROPFIRMSQUAD_DATABASE_URL:-}" ]; then
+            backup_db propfirmsquad "$PROPFIRMSQUAD_DATABASE_URL"
+          else
+            echo "PROPFIRMSQUAD_DATABASE_URL not set — skipping propfirmsquad backup."
+          fi
+
           echo "backup-db done."
