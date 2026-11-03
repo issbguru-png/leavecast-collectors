@@ -1,4 +1,4 @@
-name: collect-fast (tsa + faa)
+name: collect-fast (first-party + faa)
 on:
   # The web pinger (external cron) drives the real ~10-min cadence via
   # workflow_dispatch. This schedule is a backup only, kept slow so it rarely
@@ -18,11 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install --omit=dev --no-audit --no-fund
-      - name: TSA security waits
-        env:
-          TSAWAITTIMES_API_KEY: ${{ secrets.TSAWAITTIMES_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: node collectors/run.mjs tsa
+      # 'tsa' (paid reseller) retired 2026-11-03 — account deleted. Former-reseller
+      # airports are now served from our own history; there is nothing to collect.
       - name: Collect first-party airport feeds (JFK/LGA/EWR/DCA/IAD/DTW/PHX/PHL)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
